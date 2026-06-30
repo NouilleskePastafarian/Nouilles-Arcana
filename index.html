@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Éditeur de fonds animés</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body { width:100%; height:100%; overflow:hidden; background:#0a0e16; font-family:"Segoe UI", sans-serif; color:#f0e0b0; }
+  #app { display:flex; flex-direction:column; width:100%; height:100%; }
+
+  @keyframes glowPulse { 0%, 100% { opacity: var(--op-min, 0.5); } 50% { opacity: var(--op-max, 1); } }
+
+  /* ── Scrollbars du thème (Chromium + Firefox) ── */
+  #panel, #fileList, #bgPicker .box { scrollbar-width:thin; scrollbar-color:#c8920a #0d1320; }
+  #panel::-webkit-scrollbar, #fileList::-webkit-scrollbar, #bgPicker .box::-webkit-scrollbar { width:8px; }
+  #panel::-webkit-scrollbar-track, #fileList::-webkit-scrollbar-track, #bgPicker .box::-webkit-scrollbar-track { background:#0d1320; }
+  #panel::-webkit-scrollbar-thumb, #fileList::-webkit-scrollbar-thumb, #bgPicker .box::-webkit-scrollbar-thumb { background:rgba(200,146,10,0.45); border-radius:4px; }
+  #panel::-webkit-scrollbar-thumb:hover, #fileList::-webkit-scrollbar-thumb:hover, #bgPicker .box::-webkit-scrollbar-thumb:hover { background:rgba(200,146,10,0.7); }
+
+  /* ── Barre du haut ── */
+  #toolbar { display:flex; align-items:center; gap:10px; padding:8px 12px; background:#0d1320; border-bottom:1px solid rgba(200,146,10,0.35); flex-shrink:0; }
+  #toolbar button { background:rgba(200,146,10,0.15); border:1px solid rgba(200,146,10,0.5); color:#c8920a; padding:6px 10px; border-radius:3px; cursor:pointer; font-size:12px; }
+  #toolbar button:hover { background:rgba(200,146,10,0.28); }
+  #folderIndicator, #bgPickerBtn { font-size:12px; cursor:pointer; padding:6px 10px; border-radius:3px; background:rgba(200,146,10,0.1); border:1px solid rgba(200,146,10,0.35); white-space:nowrap; }
+  #folderIndicator:hover, #bgPickerBtn:hover { background:rgba(200,146,10,0.22); }
+  .sep { width:1px; height:20px; background:rgba(200,146,10,0.25); flex-shrink:0; }
+  #zoomBar { display:flex; align-items:center; gap:6px; margin:0 auto; }
+  #zoomBar button { padding:4px 9px; font-size:13px; }
+  #zoomBar input[type="range"] { width:120px; accent-color:#c8920a; }
+  #zoomLabel { font-size:11px; width:36px; text-align:center; opacity:0.8; }
+  #currentFile { font-size:12px; opacity:0.85; white-space:nowrap; }
+  #saveStatus { font-size:11px; color:#8fd080; white-space:nowrap; }
+
+  #resumeBanner { display:none; align-items:center; gap:10px; padding:8px 12px; background:rgba(200,146,10,0.18); border-bottom:1px solid rgba(200,146,10,0.4); font-size:12px; flex-shrink:0; }
+  #resumeBanner button { background:#c8920a; border:none; color:#0a1322; padding:5px 10px; border-radius:3px; cursor:pointer; font-weight:bold; font-size:12px; }
+  #btnDismissResume { background:transparent !important; color:#c8920a !important; font-weight:normal !important; margin-left:auto; padding:5px 8px !important; }
+  #btnDismissResume:hover { background:rgba(200,146,10,0.2) !important; }
+
+  #body { flex:1; display:flex; min-height:0; }
+
+  /* ── Explorateur (gauche) ── */
+  #explorerWrap { flex-shrink:0; display:flex; }
+  #explorer { width:230px; background:#0d1320; border-right:1px solid rgba(200,146,10,0.25); display:flex; flex-direction:column; overflow:hidden; transition:width 0.15s ease; }
+  #explorer.collapsed { width:0; border-right:none; }
+  #explorerToggle { width:18px; flex-shrink:0; background:#0d1320; border-right:1px solid rgba(200,146,10,0.25); cursor:pointer; display:flex; align-items:center; justify-content:center; color:#c8920a; font-size:11px; }
+  #breadcrumb { padding:8px 10px; font-size:11px; border-bottom:1px solid rgba(200,146,10,0.2); display:flex; flex-wrap:wrap; gap:2px; flex-shrink:0; }
+  #breadcrumb span.crumb { cursor:pointer; color:#c8920a; }
+  #breadcrumb span.crumb:hover { text-decoration:underline; }
+  #fileList { flex:1; overflow-y:auto; overflow-x:hidden; }
+  #fileList .item { padding:7px 10px; font-size:12px; cursor:pointer; border-bottom:1px solid rgba(255,255,255,0.04); word-break:break-all; user-select:none; }
+  #fileList .item:hover { background:rgba(200,146,10,0.1); }
+  #fileList .item.selected { background:rgba(200,146,10,0.18); }
+  #fileList .item.open { background:rgba(200,146,10,0.3); color:#fff; }
+  #fileList .empty { padding:14px 10px; font-size:11px; opacity:0.5; line-height:1.6; }
+  #explorerActions { display:flex; flex-direction:column; gap:6px; padding:8px; border-top:1px solid rgba(200,146,10,0.2); flex-shrink:0; }
+  #explorerActions button { font-size:11px; padding:7px; background:rgba(200,146,10,0.12); border:1px solid rgba(200,146,10,0.4); color:#c8920a; border-radius:3px; cursor:pointer; }
+  #explorerActions button#btnDeleteExp { background:#c0203a; border:1px solid #ff4d6d; color:#fff; font-weight:bold; }
+  #explorerActions button#btnDeleteExp:hover { background:#e02748; }
+  #explorerActions button#btnDeleteExp:disabled { background:rgba(255,255,255,0.03); border-color:rgba(255,255,255,0.08); color:rgba(255,255,255,0.25); cursor:not-allowed; font-weight:normal; }
+  .explorerHint { font-size:10px; opacity:0.55; padding:0 2px; }
+
+  /* ── Scène ── */
+  #stageOuter { position:relative; flex:1; background:#050c18; overflow:hidden; cursor:default; }
+  #stageInner { position:absolute; top:0; left:0; width:1920px; height:1080px; transform-origin:0 0; background:#050c18; }
+  #stageInner .bgEl { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; z-index:1; }
+  #stageEmpty { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; flex-direction:column; gap:10px; color:rgba(200,146,10,0.4); font-size:13px; text-align:center; z-index:5; }
+  #fxCanvas { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; z-index:10; }
+  .nk-marker { position:absolute; width:14px; height:14px; border-radius:50%; transform:translate(-50%,-50%); cursor:grab; border:2px solid #050c18; box-shadow:0 0 8px rgba(0,0,0,0.6); z-index:50; }
+  .nk-clipbox { position:absolute; border:2px dashed #c8920a; cursor:move; z-index:49; background:rgba(200,146,10,0.06); }
+  .nk-clipbox .handle { position:absolute; right:-7px; bottom:-7px; width:14px; height:14px; border-radius:50%; background:#fff; border:2px solid #c8920a; cursor:nwse-resize; }
+  .nk-clipbox .clipClose { position:absolute; top:-9px; right:-9px; width:18px; height:18px; border-radius:50%; background:#0d1320; border:2px solid #c8920a; color:#c8920a; font-size:10px; line-height:1; display:flex; align-items:center; justify-content:center; cursor:pointer; }
+  .nk-clipbox .clipClose:hover { background:#c0203a; border-color:#ff4d6d; color:#fff; }
+
+  #ctxMenu { position:fixed; z-index:500; background:#0d1320; border:1px solid rgba(200,146,10,0.5); border-radius:4px; padding:4px; display:none; box-shadow:0 4px 18px rgba(0,0,0,0.5); min-width:170px; }
+  #ctxMenu .mi { padding:7px 12px; font-size:12px; cursor:pointer; border-radius:3px; white-space:nowrap; }
+  #ctxMenu .mi:hover { background:rgba(200,146,10,0.2); }
+  #ctxMenu .mi.disabled { opacity:0.35; cursor:not-allowed; }
+
+  #bgPicker { position:absolute; inset:0; background:rgba(5,9,18,0.92); z-index:200; display:none; flex-direction:column; align-items:center; justify-content:center; gap:10px; }
+  #bgPicker .box { width:420px; max-height:70%; background:#0d1320; border:1px solid rgba(200,146,10,0.5); border-radius:4px; overflow-y:auto; overflow-x:hidden; padding:10px; }
+  #bgPicker .row { padding:8px 10px; font-size:12px; cursor:pointer; border-radius:3px; word-break:break-all; }
+  #bgPicker .row:hover { background:rgba(200,146,10,0.18); }
+  #bgPicker button.close { background:rgba(200,40,40,0.2); border:1px solid rgba(200,40,40,0.5); color:#e07070; padding:6px 14px; border-radius:3px; cursor:pointer; }
+
+  /* ── Panneau (droite) ── */
+  #panelWrap { position:relative; flex-shrink:0; display:flex; }
+  #panelToggle { width:18px; flex-shrink:0; background:#0d1320; border-left:1px solid rgba(200,146,10,0.25); cursor:pointer; display:flex; align-items:center; justify-content:center; color:#c8920a; font-size:11px; }
+  #panel { width:320px; background:#0d1320; border-left:1px solid rgba(200,146,10,0.35); overflow-y:auto; overflow-x:hidden; transition:width 0.15s ease; }
+  #panel.collapsed { width:0; border-left:none; overflow:hidden; }
+
+  #tabs { display:flex; border-bottom:1px solid rgba(200,146,10,0.25); }
+  #tabs button { flex:1; padding:10px 2px; background:none; border:none; color:rgba(240,224,176,0.5); font-size:11px; cursor:pointer; border-bottom:2px solid transparent; white-space:nowrap; }
+  #tabs button.active { color:#c8920a; border-bottom-color:#c8920a; }
+
+  .panelBody { padding:14px; width:320px; overflow-wrap:break-word; }
+  .panelBody h3 { font-size:13px; color:#c8920a; margin-bottom:10px; letter-spacing:0.05em; }
+  .field { margin-bottom:10px; }
+  .field label { font-size:10px; opacity:0.7; display:block; margin-bottom:3px; }
+  .field input[type="range"] { width:100%; accent-color:#c8920a; }
+  .field input[type="number"], .field input[type="text"], .field input[type="color"] { width:100%; background:#0a1322; border:1px solid rgba(200,146,10,0.4); color:#f0e0b0; border-radius:3px; padding:4px 6px; font-family:monospace; font-size:11px; }
+  .chiprow { display:flex; flex-wrap:wrap; gap:5px; margin-bottom:12px; }
+  .chip { padding:5px 8px; font-size:10px; border-radius:3px; cursor:pointer; font-family:monospace; background:rgba(200,146,10,0.12); color:#c8920a; border:1px solid rgba(200,146,10,0.4); max-width:100%; overflow:hidden; text-overflow:ellipsis; }
+  .chip.active { background:#c8920a; color:#0a1322; }
+  .btn { width:100%; padding:8px; border-radius:3px; cursor:pointer; font-size:12px; border:1px solid; margin-bottom:8px; }
+  .btn-main { background:rgba(200,146,10,0.18); border-color:rgba(200,146,10,0.5); color:#c8920a; }
+  .btn-danger { background:#c0203a; border:1px solid #ff4d6d; color:#fff; font-weight:bold; }
+  .btn-danger:hover { background:#e02748; }
+  .checkrow { display:flex; align-items:center; gap:6px; font-size:11px; margin-bottom:10px; cursor:pointer; }
+
+  .toggle-sw { display:flex; align-items:center; gap:9px; font-size:11px; margin-bottom:9px; cursor:pointer; user-select:none; }
+  .toggle-sw .track { width:34px; height:18px; border-radius:9px; background:rgba(200,146,10,0.12); border:1px solid rgba(200,146,10,0.4); position:relative; flex-shrink:0; transition:background 0.15s ease; }
+  .toggle-sw .knob { position:absolute; top:1px; left:1px; width:14px; height:14px; border-radius:50%; background:#c8920a; transition:transform 0.15s ease, background 0.15s ease; }
+  .toggle-sw.on .track { background:rgba(200,146,10,0.55); }
+  .toggle-sw.on .knob { transform:translateX(16px); background:#fff; }
+  .hint { font-size:10px; opacity:0.55; line-height:1.5; margin-bottom:10px; }
+  .bgThumb { width:100%; max-height:120px; object-fit:cover; border-radius:3px; border:1px solid rgba(200,146,10,0.3); margin-bottom:8px; }
+  .bgName { font-size:12px; color:#f0e0b0; word-break:break-all; margin-bottom:10px; padding:8px; background:rgba(200,146,10,0.08); border-radius:3px; border:1px solid rgba(200,146,10,0.25); }
+
+  details.sec { margin-bottom:12px; border:1px solid rgba(200,146,10,0.2); border-radius:4px; overflow:hidden; }
+  details.sec summary { padding:8px 10px; font-size:11px; color:#c8920a; cursor:pointer; background:rgba(200,146,10,0.08); list-style:none; user-select:none; }
+  details.sec summary::-webkit-details-marker { display:none; }
+  details.sec summary::before { content:"▸ "; }
+  details.sec[open] summary::before { content:"▾ "; }
+  details.sec .secBody { padding:10px; }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <div id="toolbar">
+    <div id="folderIndicator">📁 Choisir un dossier</div>
+    <div class="sep"></div>
+    <span id="saveStatus"></span>
+    <div id="zoomBar">
+      <button id="zoomOut">−</button>
+      <input type="range" id="zoomSlider" min="25" max="300" value="100">
+      <span id="zoomLabel">100%</span>
+      <button id="zoomIn">+</button>
+      <button id="zoomFit">Ajuster</button>
+    </div>
+    <span id="currentFile">Aucun fichier ouvert</span>
+    <div id="bgPickerWrap" style="display:none; align-items:center; gap:10px;">
+      <div class="sep"></div>
+      <div id="bgPickerBtn">🖼 Choisir le fond</div>
+    </div>
+  </div>
+
+  <div id="resumeBanner">
+    <span>Une session précédente a été trouvée.</span>
+    <button id="btnResume">🔄 Reprendre</button>
+    <button id="btnDismissResume" title="Fermer">✕</button>
+  </div>
+
+  <div id="body">
+    <div id="explorerWrap">
+      <div id="explorer">
+        <div id="breadcrumb"></div>
+        <div id="fileList"><div class="empty">Choisissez un dossier pour voir vos fichiers ici.</div></div>
+        <div id="explorerActions">
+          <div class="explorerHint">Clic = sélectionner · Ctrl/Maj+clic = multi-sélection · Double-clic = ouvrir · Clic droit = menu</div>
+          <button id="btnNewFileExp" disabled>+ Nouveau fichier</button>
+          <button id="btnNewFolderExp" disabled>+ Nouveau dossier</button>
+          <button id="btnRenameExp" disabled>✏ Renommer</button>
+          <button id="btnDeleteExp" disabled>🗑 Supprimer la sélection</button>
+        </div>
+      </div>
+      <div id="explorerToggle">◂</div>
+    </div>
+
+    <div id="stageOuter">
+      <div id="stageEmpty">
+        <div style="font-size:30px;">🖼️</div>
+        <div>Aucune scène ouverte.<br>Ouvrez un dossier puis un fichier, ou créez-en un nouveau.</div>
+      </div>
+      <div id="stageInner">
+        <canvas id="fxCanvas" width="1920" height="1080"></canvas>
+      </div>
+      <div id="ctxMenu"></div>
+      <div id="bgPicker">
+        <div style="font-size:13px;color:#c8920a;">Choisissez une image ou vidéo de fond</div>
+        <div class="box" id="bgPickerList"></div>
+        <button class="close" id="btnClosePicker">Annuler</button>
+      </div>
+    </div>
+
+    <div id="panelWrap">
+      <div id="panelToggle">▸</div>
+      <div id="panel">
+        <div id="tabs"></div>
+        <div id="panelBody" class="panelBody"></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script src="./js/ui-core.js"></script>
+<script src="./js/mode-config.js"></script>
+<script src="./js/mode-background.js"></script>
+<script src="./js/mode-chat.js"></script>
+</body>
+</html>

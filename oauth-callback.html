@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Connexion Twitch…</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: "Segoe UI", sans-serif;
+    background: #0a0e16;
+    color: #f0e0b0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+    text-align: center;
+  }
+  .card {
+    background: #0d1320;
+    border: 1px solid rgba(200,146,10,0.4);
+    border-radius: 8px;
+    padding: 36px 48px;
+    max-width: 400px;
+  }
+  .icon { font-size: 48px; margin-bottom: 16px; }
+  h1 { font-size: 16px; color: #c8920a; margin-bottom: 10px; }
+  p  { font-size: 13px; opacity: 0.7; line-height: 1.6; }
+  .ok  { color: #8fd080; }
+  .err { color: #e07070; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="icon" id="icon">⏳</div>
+  <h1 id="title">Connexion en cours…</h1>
+  <p  id="msg">Récupération du token Twitch.</p>
+</div>
+<script>
+(function () {
+  const params  = new URLSearchParams(window.location.hash.slice(1));
+  const token   = params.get("access_token");
+  const errCode = params.get("error");
+  const errDesc = params.get("error_description");
+
+  const icon  = document.getElementById("icon");
+  const title = document.getElementById("title");
+  const msg   = document.getElementById("msg");
+
+  if (token) {
+    // Envoie le token à la fenêtre parente (l'éditeur)
+    if (window.opener) {
+      window.opener.postMessage({ type: "nk-oauth-token", token }, "*");
+    }
+    icon.textContent  = "✓";
+    icon.className    = "icon ok";
+    title.textContent = "Connexion réussie !";
+    title.className   = "ok";
+    msg.textContent   = "Vous pouvez fermer cette fenêtre. Retour automatique dans 2 s…";
+    setTimeout(() => window.close(), 2000);
+
+  } else if (errCode) {
+    icon.textContent  = "✗";
+    icon.className    = "icon err";
+    title.textContent = "Connexion refusée";
+    title.className   = "err";
+    msg.textContent   = (errDesc || errCode).replace(/_/g, " ");
+
+  } else {
+    icon.textContent  = "?";
+    title.textContent = "Page de callback Twitch";
+    msg.textContent   = "Cette page doit être ouverte par l'éditeur via le bouton "
+                      + "« Se connecter avec Twitch ».";
+  }
+})();
+</script>
+</body>
+</html>

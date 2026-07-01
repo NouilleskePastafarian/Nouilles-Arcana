@@ -1,0 +1,13 @@
+{
+  "name": "nk-relay",
+  "version": "1.0.0",
+  "description": "Relais local Twitch pour les overlays Nouilles-Arcana (remplace Streamer.bot)",
+  "private": true,
+  "type": "commonjs",
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0"
+  }
+}

@@ -38,6 +38,28 @@ NK.core = (function () {
   const stageInner = $("#stageInner");
   const fxCanvas = $("#fxCanvas");
 
+  // ── Résolution de la scène (= résolution du stream) ──
+  // 1920×1080 par défaut ; configurable via le panneau ⚙ (stockée dans
+  // config.json). Les fichiers exportés s'adaptent de toute façon à la
+  // taille de leur source OBS — la scène de l'éditeur sert à travailler
+  // dans les mêmes proportions et la même échelle de pixels.
+  let stageW = 1920, stageH = 1080;
+  function getStageSize() { return { w: stageW, h: stageH }; }
+  function setStageSize(w, h) {
+    w = Math.max(320, parseInt(w, 10) || 1920);
+    h = Math.max(320, parseInt(h, 10) || 1080);
+    if (w === stageW && h === stageH) return;
+    stageW = w; stageH = h;
+    stageInner.style.width = w + "px";
+    stageInner.style.height = h + "px";
+    fxCanvas.width = w;
+    fxCanvas.height = h;
+    if (!userZoomed) zoomFit();
+    // Les modes qui dessinent sur le canvas (fond animé) doivent re-semer
+    // leurs particules dans le nouveau repère.
+    document.dispatchEvent(new CustomEvent("nk-stage-resized", { detail: { w, h } }));
+  }
+
   function currentDir() { return dirStack[dirStack.length - 1]; }
   function depthFromRoot() { return dirStack.length - 1; }
   function getModeId() { return modeId; }
@@ -65,9 +87,9 @@ NK.core = (function () {
   }
   function zoomFit() {
     const r = stageOuter.getBoundingClientRect();
-    zoom = Math.min(r.width / 1920, r.height / 1080);
-    panX = (r.width - 1920 * zoom) / 2;
-    panY = (r.height - 1080 * zoom) / 2;
+    zoom = Math.min(r.width / stageW, r.height / stageH);
+    panX = (r.width - stageW * zoom) / 2;
+    panY = (r.height - stageH * zoom) / 2;
     userZoomed = false;
     applyTransform();
   }
@@ -260,6 +282,8 @@ NK.core = (function () {
       const text = await file.text();
       if (text.includes('"nk-chat-config"')) return "chat";
       if (text.includes('"nk-config"')) return "background";
+      if (text.includes('"nk-alerts-config"')) return "alerts";
+      if (text.includes('"nk-widgets-config"')) return "widgets";
     } catch (e) {}
     return null;
   }
@@ -306,7 +330,7 @@ NK.core = (function () {
         icon = "📁 ";
       } else {
         const mode = fileModes[idx - dirs.length];
-        icon = mode === "chat" ? "💬 " : mode === "background" ? "🖼 " : "📄 ";
+        icon = mode === "chat" ? "💬 " : mode === "background" ? "🖼 " : mode === "alerts" ? "🔔 " : mode === "widgets" ? "📊 " : "📄 ";
       }
       div.textContent = icon + entry.name;
       div.onclick = (e) => {
@@ -567,7 +591,8 @@ NK.core = (function () {
     const chosenId = await showNewFileModal();
     if (!chosenId) return;
     if (dirty) await saveFile(true);
-    const defaultName = chosenId === "background" ? "Nouveau Fond.html" : "Nouveau Chat.html";
+    const DEFAULT_NAMES = { background: "Nouveau Fond.html", chat: "Nouveau Chat.html", alerts: "Nouvelle Alerte.html", widgets: "Nouvelle Barre.html" };
+    const defaultName = DEFAULT_NAMES[chosenId] || "Nouveau.html";
     const name = prompt("Nom du nouveau fichier (ex: " + defaultName + ") :", defaultName);
     if (!name) return;
     const fileName = /\.(html|htm)$/i.test(name) ? name : name + ".html";
@@ -595,6 +620,21 @@ NK.core = (function () {
     renderPanel();
   };
 
+  // Les sources navigateur OBS ne relisent jamais un fichier tout seules —
+  // elles gardent en mémoire la page chargée au démarrage de la scène. Sans
+  // ce signal, "Envoyer sur OBS" resterait bloqué sur l'ancienne version
+  // même après une sauvegarde réussie. On prévient donc le relais (s'il
+  // tourne) juste après chaque sauvegarde ; les overlays qui l'écoutent
+  // (Alertes/Barre Widgets) se rechargent tout seuls. Aucun effet si le
+  // relais n'est pas lancé (échec silencieux).
+  function notifyRelayReload() {
+    try {
+      const ws = new WebSocket("ws://127.0.0.1:8080/");
+      ws.onopen = () => { ws.send(JSON.stringify({ request: "NkReload" })); setTimeout(() => ws.close(), 200); };
+      ws.onerror = () => {};
+    } catch (e) { /* relais absent — pas grave */ }
+  }
+
   async function saveFile(isAuto) {
     if (!currentHandle || !modeId) return;
     clearTimeout(saveTimer);
@@ -605,6 +645,7 @@ NK.core = (function () {
       await writable.close();
       dirty = false;
       updateSaveStatus(isAuto ? "✓ sauvegardé automatiquement" : "✓ sauvegardé");
+      notifyRelayReload();
     } catch (e) {
       updateSaveStatus("⚠ échec de la sauvegarde : " + e.message);
     }
@@ -645,6 +686,44 @@ NK.core = (function () {
   }
 
   // ═══════════════════════════════════════════════════════════════════════
+  // HELPERS FICHIERS PARTAGÉS — utilisés par plusieurs modes (avant : trois
+  // copies quasi identiques dans mode-chat/alerts/widgets/background).
+  // ═══════════════════════════════════════════════════════════════════════
+  // Parcourt le dossier ouvert (3 niveaux max) et liste les fichiers dont le
+  // nom matche `pattern`, en chemins relatifs à la racine.
+  async function collectFiles(pattern) {
+    const matches = [];
+    if (!rootHandle) return matches;
+    async function walk(handle, prefix, depth) {
+      for await (const [name, h] of handle.entries()) {
+        const rel = prefix + name;
+        if (h.kind === "file" && pattern.test(name)) matches.push(rel);
+        else if (h.kind === "directory" && depth < 3) await walk(h, rel + "/", depth + 1);
+      }
+    }
+    await walk(rootHandle, "", 0);
+    return matches;
+  }
+
+  // Contenu de support.js (runtime dc), lu via FSA pour pouvoir l'inliner
+  // dans les aperçus blob: (fetch et <script src> y sont bloqués en file://).
+  let supportJsContent = null;
+  async function ensureSupportJs() {
+    if (supportJsContent !== null) return supportJsContent;
+    if (!rootHandle) return null;
+    try {
+      const url = decodeURIComponent(window.location.pathname || window.location.href);
+      const parts = url.replace(/\/[^/]*$/, "").split("/");
+      const editorDir = parts[parts.length - 1] || "Nouilles-Arcana";
+      const dirHandle = await rootHandle.getDirectoryHandle(editorDir);
+      const fh = await dirHandle.getFileHandle("support.js");
+      const file = await fh.getFile();
+      supportJsContent = await file.text();
+    } catch (e) { supportJsContent = null; }
+    return supportJsContent;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
   // WIDGETS DE PANNEAU GÉNÉRIQUES (réutilisés par tous les modes)
   // ═══════════════════════════════════════════════════════════════════════
   function toggleSwitch(kind, key, label, checked) {
@@ -680,5 +759,7 @@ NK.core = (function () {
     openFile, saveFile, closeCurrentFile, renderPanel, setActiveTab,
     startDrag, showCtxMenu, hideCtxMenu,
     toggleSwitch, rgbToHex, hexToRgb, field,
+    collectFiles, ensureSupportJs,
+    getStageSize, setStageSize,
   };
 })();

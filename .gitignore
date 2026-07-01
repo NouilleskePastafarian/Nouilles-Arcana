@@ -1,0 +1,5 @@
+# Serveur relais — artefacts de build, jamais committés
+server/node_modules/
+server/dist/
+server/build/bundle.js
+server/build/sea-prep.blob

@@ -13,29 +13,13 @@
   const stageInner = core.stageInner;
   const fxCanvas = core.fxCanvas;
 
-  // Contenu de support.js, inliné dans la preview blob.
-  // On le lit via File System Access API (rootHandle déjà accordé) pour
-  // contourner les restrictions file:// qui bloquent fetch() et les scripts
-  // externes depuis un blob: URL.
-  let supportJsContent = null;
-  async function ensureSupportJs() {
-    if (supportJsContent !== null) return supportJsContent;
-    const rootHandle = core.getRootHandle();
-    if (!rootHandle) return null;
-    try {
-      const _url = decodeURIComponent(window.location.pathname || window.location.href);
-      const _parts = _url.replace(/\/[^/]*$/, '').split('/');
-      const _editorDir = _parts[_parts.length - 1] || 'Nouilles-Arcana';
-      const editeurDir = await rootHandle.getDirectoryHandle(_editorDir);
-      const fh = await editeurDir.getFileHandle('support.js');
-      const file = await fh.getFile();
-      supportJsContent = await file.text();
-    } catch (e) { supportJsContent = null; }
-    return supportJsContent;
-  }
+  // Contenu de support.js, inliné dans la preview blob (helper partagé).
+  const ensureSupportJs = () => core.ensureSupportJs();
 
   const CHAT_KEYS = ["channel", "messageLimit", "fallbackColor", "usernameFont", "messageFont",
-    "usernameSize", "messageSize", "showBadges", "messageExpiry", "expiryDuration", "expiryFade", "messageDirection"];
+    "usernameSize", "messageSize", "showBadges", "messageExpiry", "expiryDuration", "expiryFade", "messageDirection",
+    "messageColor", "letterSpacing", "wordSpacing", "lineHeight", "msgGap", "msgAlign", "msgAnim",
+    "msgBgColor", "msgBgAlpha", "msgBgRadius", "msgPadding"];
   const FRAME_KEYS = ["borderRadius", "borderWidth", "borderColor", "borderAlpha", "bgColor", "bgAlpha",
     "showGlow", "showOrnaments", "headerHeight", "titleText", "titleSize", "titleSpacing",
     "padding", "paddingLeft", "paddingRight"];
@@ -54,6 +38,22 @@
     expiryDuration: 30,     // secondes avant que le message commence à disparaître
     expiryFade: 3,          // secondes du fondu
     messageDirection: "bottom", // "bottom" = récents en bas, "top" = récents en haut
+    // Messages — mise en forme fine
+    messageColor: "#f0e0b0",
+    letterSpacing: 0,       // em
+    wordSpacing: 0,         // px
+    lineHeight: 1.6,
+    msgGap: 12,             // px entre deux messages
+    msgAlign: "left",       // left | center | right
+    msgAnim: "slide-up",    // slide-up | slide-left | slide-right | fade | pop | none
+    // Bulle de message (fond individuel par message)
+    msgBgColor: "4,9,18",
+    msgBgAlpha: 0,          // 0 = pas de bulle
+    msgBgRadius: 8,
+    msgPadding: 6,
+    // Aperçu éditeur (n'affecte pas OBS — la taille réelle se règle dans OBS)
+    previewW: 420,
+    previewH: 800,
     // Cadre
     borderRadius: 18,
     borderWidth: 0,
@@ -105,17 +105,41 @@
     { key:"messageSize",     label:"Taille du message (px)",    min:8,   max:36,  step:1   }, // [2]
     { key:"expiryDuration",  label:"Durée d'affichage (s)",     min:5,   max:120, step:1   }, // [3]
     { key:"expiryFade",      label:"Durée du fondu (s)",        min:0.5, max:30,  step:0.5 }, // [4]
+    { key:"letterSpacing",   label:"Espacement des lettres (em)", min:0, max:0.3, step:0.005 }, // [5]
+    { key:"wordSpacing",     label:"Espacement des mots (px)",  min:0,   max:24,  step:0.5 }, // [6]
+    { key:"lineHeight",      label:"Espacement des lignes",     min:1,   max:3,   step:0.05 }, // [7]
+    { key:"msgGap",          label:"Écart entre messages (px)", min:0,   max:40,  step:1   }, // [8]
+    { key:"msgBgAlpha",      label:"Opacité de la bulle (0 = sans bulle)", min:0, max:1, step:0.01 }, // [9]
+    { key:"msgBgRadius",     label:"Arrondi de la bulle (px)",  min:0,   max:30,  step:1   }, // [10]
+    { key:"msgPadding",      label:"Marge interne de la bulle (px)", min:0, max:24, step:1 }, // [11]
+  ];
+  const NUM_FIELDS_PREVIEW = [
+    { key:"previewW", label:"Largeur de l'aperçu (px)",  min:200, max:1400, step:10 },
+    { key:"previewH", label:"Hauteur de l'aperçu (px)",  min:200, max:1080, step:10 },
+  ];
+  const MSG_ANIM_OPTIONS = [
+    { value:"slide-up",    label:"Glisse vers le haut" },
+    { value:"slide-left",  label:"Arrive de la droite" },
+    { value:"slide-right", label:"Arrive de la gauche" },
+    { value:"fade",        label:"Fondu" },
+    { value:"pop",         label:"Zoom (pop)" },
+    { value:"none",        label:"Aucune (instantané)" },
   ];
 
+  function escapeAttr(v) { return String(v == null ? "" : v).replace(/"/g, "&quot;"); }
   function fld(def, cfg) { return core.field(def, cfg[def.key], "chatkey"); }
 
   function renderToutTab(cfg) {
     let html = "<h3>🎬 APERÇU</h3>";
     html += '<div class="hint">Aperçu live dans la scène, à droite. Utilisez les boutons en bas de la scène pour simuler des messages de test sans toucher au vrai chat Twitch.</div>';
-    html += '<div class="bgName">Salon Twitch : <b>' + cfg.channel + "</b></div>";
+    html += '<div class="bgName">Salon Twitch : <b>' + escapeAttr(cfg.channel) + "</b></div>";
     html += '<div class="hint">' + (cfg.showBadges ? "Badges activés" : "Badges désactivés") + " · Limite : " + cfg.messageLimit + " messages";
     if (cfg.messageExpiry) html += " · Expiration : " + cfg.expiryDuration + "s + fondu " + cfg.expiryFade + "s";
     html += ".</div>";
+    html += '<details class="sec" data-sec="chatPreviewSize" open><summary>Taille de l\'aperçu (dans l\'éditeur)</summary><div class="secBody">';
+    html += '<div class="hint">Réglez ici les mêmes dimensions que votre Browser Source OBS pour voir exactement le rendu final. Ça ne change rien au fichier exporté.</div>';
+    NUM_FIELDS_PREVIEW.forEach((def) => { html += fld(def, cfg); });
+    html += "</div></details>";
     return html;
   }
 
@@ -128,7 +152,7 @@
     html += "</div></details>";
 
     html += '<details class="sec" data-sec="chatHeader" open><summary>En-tête</summary><div class="secBody">';
-    html += '<div class="field"><label>Titre</label><input type="text" id="chatTitleText" value="' + cfg.titleText + '"></div>';
+    html += '<div class="field"><label>Titre</label><input type="text" id="chatTitleText" value="' + escapeAttr(cfg.titleText) + '"></div>';
     html += fld(NUM_FIELDS_FRAME[4], cfg);
     html += fld(NUM_FIELDS_FRAME[5], cfg);
     html += fld(NUM_FIELDS_FRAME[6], cfg);
@@ -155,15 +179,26 @@
   function renderMessagesTab(cfg) {
     let html = "<h3>💬 MESSAGES</h3>";
 
-    html += '<div class="field"><label>Salon Twitch</label><input type="text" id="chatChannel" value="' + cfg.channel + '"></div>';
+    html += '<div class="field"><label>Salon Twitch</label><input type="text" id="chatChannel" value="' + escapeAttr(cfg.channel) + '"></div>';
     html += fld(NUM_FIELDS_MESSAGES[0], cfg);
     html += core.toggleSwitch("chattoggle", "showBadges", "Afficher les badges (modo, VIP, abonné…)", cfg.showBadges);
 
-    // Direction
+    // Direction & alignement
     html += '<div class="field"><label>Direction des messages</label><div class="chiprow">';
     html += '<button class="chip' + (cfg.messageDirection !== "top" ? " active" : "") + '" data-chatdir="bottom">↑ Récents en bas</button>';
     html += '<button class="chip' + (cfg.messageDirection === "top" ? " active" : "") + '" data-chatdir="top">↓ Récents en haut</button>';
     html += "</div></div>";
+    html += '<div class="field"><label>Alignement des messages</label><div class="chiprow">';
+    html += '<button class="chip' + (cfg.msgAlign !== "center" && cfg.msgAlign !== "right" ? " active" : "") + '" data-chatalign="left">⯇ Bord gauche</button>';
+    html += '<button class="chip' + (cfg.msgAlign === "center" ? " active" : "") + '" data-chatalign="center">▣ Centré</button>';
+    html += '<button class="chip' + (cfg.msgAlign === "right" ? " active" : "") + '" data-chatalign="right">⯈ Bord droit</button>';
+    html += "</div></div>";
+
+    // Animation d'apparition
+    html += '<div class="field"><label>Apparition d\'un message</label><select id="chatMsgAnim">';
+    MSG_ANIM_OPTIONS.forEach((o) => { html += '<option value="' + o.value + '"' + (o.value === cfg.msgAnim ? " selected" : "") + '>' + o.label + "</option>"; });
+    html += "</select></div>";
+    html += fld(NUM_FIELDS_MESSAGES[8], cfg); // écart entre messages
 
     // Expiration
     html += core.toggleSwitch("chattoggle", "messageExpiry", "Expiration automatique des messages", cfg.messageExpiry);
@@ -173,14 +208,25 @@
     }
 
     html += '<details class="sec" data-sec="chatPseudo" open><summary>Pseudo</summary><div class="secBody">';
-    html += '<div class="field"><label>Police (CSS font-family)</label><input type="text" id="chatUsernameFont" value="' + cfg.usernameFont + '"></div>';
+    html += '<div class="field"><label>Police (CSS font-family)</label><input type="text" id="chatUsernameFont" value="' + escapeAttr(cfg.usernameFont) + '"></div>';
     html += fld(NUM_FIELDS_MESSAGES[1], cfg);
-    html += '<div class="field"><label>Couleur de secours (sans couleur Twitch)</label><input type="color" id="chatFallbackColor" value="' + cfg.fallbackColor + '"></div>';
+    html += '<div class="field"><label>Couleur de secours (sans couleur Twitch)</label><input type="color" id="chatFallbackColor" value="' + escapeAttr(cfg.fallbackColor) + '"></div>';
     html += "</div></details>";
 
-    html += '<details class="sec" data-sec="chatMsg" open><summary>Message</summary><div class="secBody">';
-    html += '<div class="field"><label>Police (CSS font-family)</label><input type="text" id="chatMessageFont" value="' + cfg.messageFont + '"></div>';
+    html += '<details class="sec" data-sec="chatMsg" open><summary>Texte du message</summary><div class="secBody">';
+    html += '<div class="field"><label>Police (CSS font-family)</label><input type="text" id="chatMessageFont" value="' + escapeAttr(cfg.messageFont) + '"></div>';
     html += fld(NUM_FIELDS_MESSAGES[2], cfg);
+    html += '<div class="field"><label>Couleur du texte</label><input type="color" id="chatMessageColor" value="' + escapeAttr(cfg.messageColor) + '"></div>';
+    html += fld(NUM_FIELDS_MESSAGES[5], cfg); // lettres
+    html += fld(NUM_FIELDS_MESSAGES[6], cfg); // mots
+    html += fld(NUM_FIELDS_MESSAGES[7], cfg); // lignes
+    html += "</div></details>";
+
+    html += '<details class="sec" data-sec="chatBubble" open><summary>Bulle de message (fond individuel)</summary><div class="secBody">';
+    html += '<div class="field"><label>Couleur de la bulle</label><input type="color" id="chatMsgBgColor" value="' + core.rgbToHex(cfg.msgBgColor) + '"></div>';
+    html += fld(NUM_FIELDS_MESSAGES[9], cfg);
+    html += fld(NUM_FIELDS_MESSAGES[10], cfg);
+    html += fld(NUM_FIELDS_MESSAGES[11], cfg);
     html += "</div></details>";
 
     return html;
@@ -211,11 +257,20 @@
         core.renderPanel(); // met à jour les chips actives + pousse la config
       };
     });
+    document.querySelectorAll("[data-chatalign]").forEach((el) => {
+      el.onclick = () => {
+        cfg.msgAlign = el.dataset.chatalign;
+        core.markDirty();
+        core.renderPanel();
+      };
+    });
+    const msgAnimSelect = $("#chatMsgAnim");
+    if (msgAnimSelect) msgAnimSelect.onchange = (e) => { cfg.msgAnim = e.target.value; core.markDirty(); update(cfg); };
     document.querySelectorAll("details.sec[data-sec]").forEach((d) => {
       d.ontoggle = () => {};
     });
     document.querySelectorAll("[data-chatkey]").forEach((el) => {
-      const allDefs = NUM_FIELDS_FRAME.concat(NUM_FIELDS_MESSAGES);
+      const allDefs = NUM_FIELDS_FRAME.concat(NUM_FIELDS_MESSAGES, NUM_FIELDS_PREVIEW);
       const def = allDefs.find((d) => d.key === el.dataset.chatkey);
       el.oninput = (e) => {
         const v = parseFloat(e.target.value);
@@ -231,6 +286,10 @@
     if (borderColorInput) borderColorInput.oninput = (e) => { cfg.borderColor = core.hexToRgb(e.target.value); core.markDirty(); update(cfg); };
     const fallbackColorInput = $("#chatFallbackColor");
     if (fallbackColorInput) fallbackColorInput.oninput = (e) => { cfg.fallbackColor = e.target.value; core.markDirty(); update(cfg); };
+    const messageColorInput = $("#chatMessageColor");
+    if (messageColorInput) messageColorInput.oninput = (e) => { cfg.messageColor = e.target.value; core.markDirty(); update(cfg); };
+    const msgBgColorInput = $("#chatMsgBgColor");
+    if (msgBgColorInput) msgBgColorInput.oninput = (e) => { cfg.msgBgColor = core.hexToRgb(e.target.value); core.markDirty(); update(cfg); };
     const titleTextInput = $("#chatTitleText");
     if (titleTextInput) titleTextInput.onchange = (e) => { cfg.titleText = e.target.value; core.markDirty(); update(cfg); };
     const channelInput = $("#chatChannel");
@@ -330,7 +389,7 @@
 
     previewWrap = document.createElement("div");
     previewWrap.id = "nkChatPreviewWrap";
-    previewWrap.style.cssText = "position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:420px; height:800px; "
+    previewWrap.style.cssText = "position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:" + (cfg.previewW || 420) + "px; height:" + (cfg.previewH || 800) + "px; "
       + "background-image:linear-gradient(45deg,#1c2330 25%,transparent 25%),linear-gradient(-45deg,#1c2330 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#1c2330 75%),linear-gradient(-45deg,transparent 75%,#1c2330 75%); "
       + "background-size:20px 20px; background-position:0 0,0 10px,10px -10px,-10px 0px; background-color:#0a0e16; box-shadow:0 0 0 1px rgba(200,146,10,0.4); z-index:20; overflow:hidden;";
     const ifr = document.createElement("iframe");
@@ -347,6 +406,10 @@
   }
 
   function update(cfg) {
+    if (previewWrap) {
+      previewWrap.style.width = (cfg.previewW || 420) + "px";
+      previewWrap.style.height = (cfg.previewH || 800) + "px";
+    }
     if (!iframeEl) return;
     postToIframe({ type: "nk-test", cmd: "config", payload: { chatConfig: splitChat(cfg), frameConfig: splitFrame(cfg) } });
   }
@@ -404,6 +467,22 @@ ${supportTag}
     @keyframes msgIn {
       0%   { opacity: 0; transform: translateY(6px); }
       100% { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes msgInLeft {
+      0%   { opacity: 0; transform: translateX(26px); }
+      100% { opacity: 1; transform: translateX(0); }
+    }
+    @keyframes msgInRight {
+      0%   { opacity: 0; transform: translateX(-26px); }
+      100% { opacity: 1; transform: translateX(0); }
+    }
+    @keyframes msgInPop {
+      0%   { opacity: 0; transform: scale(0.7); }
+      100% { opacity: 1; transform: scale(1); }
+    }
+    @keyframes msgInFade {
+      0%   { opacity: 0; }
+      100% { opacity: 1; }
     }
   </style>
 </helmet>
@@ -469,14 +548,14 @@ ${supportTag}
       </sc-if>
 
       <!-- Liste des messages -->
-      <div style="position:absolute; top:0; right:0; bottom:0; left:0; display:flex; flex-direction:{{ msgFlexDir }}; gap:12px; padding:{{ msgPaddingV }}px {{ msgPaddingRight }}px {{ msgPaddingV }}px {{ msgPaddingLeft }}px; overflow:hidden;">
+      <div style="position:absolute; top:0; right:0; bottom:0; left:0; display:flex; flex-direction:{{ msgFlexDir }}; align-items:{{ msgAlignItems }}; gap:{{ msgGap }}px; padding:{{ msgPaddingV }}px {{ msgPaddingRight }}px {{ msgPaddingV }}px {{ msgPaddingLeft }}px; overflow:hidden;">
         <sc-for list="{{ messages }}" as="m" hint-placeholder-count="0">
-          <div style="animation:msgIn 0.35s ease; opacity:{{ m.opacity }}; transition:opacity 0.5s; flex-shrink:0;">
+          <div style="animation:{{ msgAnimCss }}; opacity:{{ m.opacity }}; transition:opacity 0.5s; flex-shrink:0; max-width:100%; background:{{ msgBubbleBg }}; border-radius:{{ msgBubbleRadius }}px; padding:{{ msgBubblePad }}px; text-align:{{ msgTextAlign }};">
             <sc-for list="{{ m.badges }}" as="b" hint-placeholder-count="0">
               <span title="{{ b.setId }}" style="display:inline-flex;align-items:center;justify-content:center;width:{{ uSize }}px;height:{{ uSize }}px;font-size:{{ uSize }}px;line-height:1;vertical-align:middle;margin-right:4px;filter:drop-shadow(0 0 4px rgba(200,146,10,0.5));">{{ b.icon }}</span>
             </sc-for>
             <span style="font-family:{{ uFont }};font-size:{{ uSize }}px;color:{{ m.color }};letter-spacing:0.03em;text-shadow:0 0 8px rgba(200,146,10,0.25);">{{ m.author }}</span>
-            <span style="font-family:{{ mFont }};font-size:{{ mSize }}px;color:#f0e0b0;line-height:1.6;word-break:break-word;">
+            <span style="font-family:{{ mFont }};font-size:{{ mSize }}px;color:{{ msgColor }};line-height:{{ mLine }};letter-spacing:{{ mLetter }}em;word-spacing:{{ mWord }}px;word-break:break-word;">
               <sc-for list="{{ m.parts }}" as="p" hint-placeholder-count="0">
                 <sc-if value="{{ p.isEmote }}" hint-placeholder-val="{{ false }}">
                   <img src="{{ p.url }}" alt="{{ p.value }}" style="height:{{ mSize }}px;vertical-align:middle;margin:0 2px;">
@@ -515,6 +594,17 @@ class Component extends DCLogic {
     expiryDuration:   ${JSON.stringify(C.expiryDuration)},
     expiryFade:       ${JSON.stringify(C.expiryFade)},
     messageDirection: ${JSON.stringify(C.messageDirection)},
+    messageColor:     ${JSON.stringify(C.messageColor)},
+    letterSpacing:    ${JSON.stringify(C.letterSpacing)},
+    wordSpacing:      ${JSON.stringify(C.wordSpacing)},
+    lineHeight:       ${JSON.stringify(C.lineHeight)},
+    msgGap:           ${JSON.stringify(C.msgGap)},
+    msgAlign:         ${JSON.stringify(C.msgAlign)},
+    msgAnim:          ${JSON.stringify(C.msgAnim)},
+    msgBgColor:       ${JSON.stringify(C.msgBgColor)},
+    msgBgAlpha:       ${JSON.stringify(C.msgBgAlpha)},
+    msgBgRadius:      ${JSON.stringify(C.msgBgRadius)},
+    msgPadding:       ${JSON.stringify(C.msgPadding)},
   };
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -755,6 +845,20 @@ class Component extends DCLogic {
       msgPaddingV:    F.padding,
       msgPaddingLeft: F.paddingLeft !== undefined ? F.paddingLeft : F.padding,
       msgPaddingRight: F.paddingRight !== undefined ? F.paddingRight : F.padding,
+
+      msgAlignItems: C.msgAlign === 'right' ? 'flex-end' : C.msgAlign === 'center' ? 'center' : 'flex-start',
+      msgTextAlign:  C.msgAlign === 'right' ? 'right' : C.msgAlign === 'center' ? 'center' : 'left',
+      msgGap:        C.msgGap != null ? C.msgGap : 12,
+      msgAnimCss:    C.msgAnim === 'none' ? 'none'
+                     : (C.msgAnim === 'slide-left' ? 'msgInLeft' : C.msgAnim === 'slide-right' ? 'msgInRight'
+                     : C.msgAnim === 'pop' ? 'msgInPop' : C.msgAnim === 'fade' ? 'msgInFade' : 'msgIn') + ' 0.35s ease',
+      msgBubbleBg:     'rgba(' + (C.msgBgColor || '4,9,18') + ',' + (C.msgBgAlpha != null ? C.msgBgAlpha : 0) + ')',
+      msgBubbleRadius: C.msgBgRadius != null ? C.msgBgRadius : 8,
+      msgBubblePad:    C.msgBgAlpha > 0 ? (C.msgPadding != null ? C.msgPadding : 6) : 0,
+      msgColor:      C.messageColor || '#f0e0b0',
+      mLetter:       C.letterSpacing || 0,
+      mWord:         C.wordSpacing || 0,
+      mLine:         C.lineHeight || 1.6,
 
       frameRadius:   F.borderRadius,
       borderW:       F.borderWidth,

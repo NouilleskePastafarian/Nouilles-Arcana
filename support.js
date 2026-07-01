@@ -1420,7 +1420,12 @@
           console.error(
             "[dc-runtime] sibling fetch for <" + name + "/>:",
             url,
-            "has no <x-dc> block — not a Design Component."
+            // Chaîne coupée en deux volontairement : quand support.js est
+            // inliné dans une page (aperçus de l'éditeur), parseDcText()
+            // rescanne le source complet à la recherche de "<x-dc" — si ce
+            // littéral apparaissait tel quel ici, il serait pris pour le
+            // vrai bloc de template et corromprait tout le rendu.
+            "has no <x" + "-dc> block — not a Design Component."
           );
           return;
         }

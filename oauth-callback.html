@@ -27,6 +27,16 @@
   p  { font-size: 13px; opacity: 0.7; line-height: 1.6; }
   .ok  { color: #8fd080; }
   .err { color: #e07070; }
+  .tokRow { display:flex; gap:6px; margin-top:14px; }
+  .tokRow input {
+    flex:1; background:#0a1322; border:1px solid rgba(200,146,10,0.4);
+    color:#f0e0b0; border-radius:4px; padding:8px; font-family:monospace;
+    font-size:12px; min-width:0;
+  }
+  .tokRow button {
+    background:rgba(200,146,10,0.15); border:1px solid rgba(200,146,10,0.4);
+    color:#c8920a; border-radius:4px; padding:8px 14px; cursor:pointer; font-size:12px;
+  }
 </style>
 </head>
 <body>
@@ -46,17 +56,41 @@
   const title = document.getElementById("title");
   const msg   = document.getElementById("msg");
 
-  if (token) {
-    // Envoie le token à la fenêtre parente (l'éditeur)
-    if (window.opener) {
-      window.opener.postMessage({ type: "nk-oauth-token", token }, "*");
-    }
+  if (token && window.opener) {
+    // Ouverte par l'éditeur : on lui renvoie le token et on se ferme.
+    window.opener.postMessage({ type: "nk-oauth-token", token }, "*");
     icon.textContent  = "✓";
     icon.className    = "icon ok";
     title.textContent = "Connexion réussie !";
     title.className   = "ok";
     msg.textContent   = "Vous pouvez fermer cette fenêtre. Retour automatique dans 2 s…";
     setTimeout(() => window.close(), 2000);
+
+  } else if (token) {
+    // Ouverte à la main (ex : fenêtre de navigation privée pour connecter le
+    // compte du bot) : pas d'éditeur à prévenir, on affiche le code à copier.
+    icon.textContent  = "🔑";
+    icon.className    = "icon ok";
+    title.textContent = "Connexion réussie — copiez votre code";
+    title.className   = "ok";
+    msg.innerHTML     = "Collez ce code de connexion dans l'éditeur Nouilles-Arcana, "
+                      + "panneau <b>🤖 Bot → Compte du bot</b> :";
+    const row = document.createElement("div");
+    row.className = "tokRow";
+    const inp = document.createElement("input");
+    inp.value = token;
+    inp.readOnly = true;
+    inp.onclick = () => inp.select();
+    const btn = document.createElement("button");
+    btn.textContent = "📋 Copier";
+    btn.onclick = async () => {
+      try { await navigator.clipboard.writeText(token); } catch (e) { inp.select(); document.execCommand("copy"); }
+      btn.textContent = "✓ Copié";
+      setTimeout(() => { btn.textContent = "📋 Copier"; }, 2000);
+    };
+    row.appendChild(inp);
+    row.appendChild(btn);
+    msg.parentNode.appendChild(row);
 
   } else if (errCode) {
     icon.textContent  = "✗";

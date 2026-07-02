@@ -151,7 +151,27 @@
         de votre chaîne en tapant <code style="color:${gold};">/mod pseudo_du_bot</code> dans votre chat,
         puis cliquez « Connecter » : dans la fenêtre Twitch, <b>connectez-vous avec le compte du bot</b>
         (pas le vôtre). Sans compte dédié, le bot parle avec votre compte — ça marche aussi.
-      </div>`;
+      </div>
+      <details style="margin-top:10px;border-top:1px solid rgba(145,70,255,0.2);padding-top:8px;">
+        <summary style="font-size:10px;color:${purple};cursor:pointer;user-select:none;">
+          🕶 La fenêtre Twitch ouvre <b>votre</b> compte au lieu de celui du bot ?
+        </summary>
+        <div style="font-size:10px;opacity:0.75;line-height:1.8;padding:8px 0 2px;">
+          C'est normal : Twitch réutilise la session de votre navigateur. La solution est de passer
+          par une <b>fenêtre de navigation privée</b>, qui n'a aucune session mémorisée :<br>
+          <b>1.</b> <button type="button" id="bpAcctCopyUrl" style="${btnPurple}">📋 Copier le lien de connexion</button>
+          <span id="bpAcctCopyStatus"></span><br>
+          <b>2.</b> Ouvrez une fenêtre privée — <code style="color:${gold};">Ctrl+Maj+N</code> (Chrome/Edge)
+          ou <code style="color:${gold};">Ctrl+Maj+P</code> (Firefox) — et collez-y le lien.<br>
+          <b>3.</b> Connectez-vous avec le <b>compte du bot</b> puis cliquez « Autoriser ».<br>
+          <b>4.</b> La page affiche un code de connexion — copiez-le et collez-le ici :
+          <div style="display:flex;gap:6px;margin-top:6px;">
+            <input type="text" id="bpAcctPaste" placeholder="collez le code de connexion ici" style="${inpCss}flex:1;">
+            <button type="button" id="bpAcctPasteOk" style="${btnPurple}">Valider</button>
+          </div>
+          <div id="bpAcctPasteStatus" style="min-height:14px;margin-top:4px;"></div>
+        </div>
+      </details>`;
 
     const annBody = `
       <div style="font-size:10px;opacity:0.5;margin-bottom:8px;line-height:1.5;">Le bot écrit ces messages dans le chat quand l'événement arrive — aucune IA nécessaire. Variables entre accolades remplacées automatiquement.</div>
@@ -248,6 +268,7 @@
       </div>
       <div style="flex:1;display:flex;min-height:0;">
         <div id="bpLeft" style="flex:1.15;overflow-y:auto;padding:14px;border-right:1px solid ${purpleBd};">
+          <div id="bpScopeWarn"></div>
           ${chkRow("bpEnabled", "<b>Activer le bot</b>", bot.enabled, "prend effet au prochain démarrage du relais (redémarrez OBS après avoir enregistré)")}
           ${sec("👤 Compte du bot", acctBody, false)}
           ${sec("📣 Annonces automatiques (sans IA)", annBody, true)}
@@ -280,6 +301,7 @@
     bind();
     renderCmdList();
     refreshAcctStatus();
+    checkBotScopes();
     simSystem("Bienvenue dans le chat de test ! Tapez un message, un mot interdit, une commande, ou mentionnez « " + (bot.botName || "le bot") + " ». Les boutons du haut simulent les événements Twitch.");
   }
 
@@ -361,9 +383,42 @@
         acctToken = "oauth:" + token;
         acctLogin = login;
         refreshAcctStatus();
+        checkBotScopes();
       });
     };
-    document.getElementById("bpAcctRemove").onclick = () => { acctToken = ""; acctLogin = ""; refreshAcctStatus(); };
+    document.getElementById("bpAcctRemove").onclick = () => { acctToken = ""; acctLogin = ""; refreshAcctStatus(); checkBotScopes(); };
+
+    // Connexion via fenêtre privée : copie du lien + collage manuel du token.
+    document.getElementById("bpAcctCopyUrl").onclick = async () => {
+      const st = document.getElementById("bpAcctCopyStatus");
+      const url = NK.twitchOAuthUrl && NK.twitchOAuthUrl();
+      if (!url) { st.innerHTML = '<span style="color:#e07070;">⚠ Client ID manquant — faites l\'étape 2 du panneau ⚙ Twitch.</span>'; return; }
+      try { await navigator.clipboard.writeText(url); st.innerHTML = '<span style="color:#8fd080;">✓ lien copié</span>'; }
+      catch (e) { window.prompt("Copiez ce lien :", url); }
+    };
+    document.getElementById("bpAcctPasteOk").onclick = async () => {
+      const st = document.getElementById("bpAcctPasteStatus");
+      const raw = (document.getElementById("bpAcctPaste").value || "").trim();
+      // Accepte le code nu, "oauth:xxx", ou l'URL complète collée entière.
+      let token = raw.replace(/^oauth:/, "");
+      const m = raw.match(/access_token=(\w+)/);
+      if (m) token = m[1];
+      if (!token) { st.innerHTML = '<span style="color:#e07070;">Collez d\'abord le code affiché par la page de connexion.</span>'; return; }
+      st.innerHTML = '<span style="opacity:0.55;">Vérification auprès de Twitch…</span>';
+      try {
+        const res = await fetch("https://id.twitch.tv/oauth2/validate", { headers: { Authorization: "OAuth " + token } });
+        if (!res.ok) { st.innerHTML = '<span style="color:#e07070;">✗ Code invalide ou expiré — refaites les étapes 1 à 4.</span>'; return; }
+        const d = await res.json();
+        acctToken = "oauth:" + token;
+        acctLogin = d.login;
+        document.getElementById("bpAcctPaste").value = "";
+        st.innerHTML = '<span style="color:#8fd080;">✓ Compte <b>' + esc(d.login) + '</b> connecté — n\'oubliez pas 💾 Enregistrer.</span>';
+        refreshAcctStatus();
+        checkBotScopes();
+      } catch (e) {
+        st.innerHTML = '<span style="color:#e07070;">⚠ ' + esc(e.message) + "</span>";
+      }
+    };
 
     // Commandes
     document.getElementById("bpCmdAdd").onclick = () => { cmds.push({ trigger: "!", reply: "" }); renderCmdList(); };
@@ -408,6 +463,44 @@
     };
     document.getElementById("bpSimSend").onclick = send;
     document.getElementById("bpSimInput").onkeydown = (e) => { if (e.key === "Enter") send(); };
+  }
+
+  // Vérifie que le token que le bot utilisera (compte dédié si connecté,
+  // sinon le vôtre) porte bien les scopes chat/modération — un token émis
+  // avant l'ajout du bot ne les a pas, et le relais refuse alors de démarrer
+  // le bot (même diagnostic que server/src/aiMod.js, mais visible ici).
+  async function checkBotScopes() {
+    const el = document.getElementById("bpScopeWarn");
+    if (!el) return;
+    el.innerHTML = "";
+    const usingBotAcct = !!(acctToken && acctLogin);
+    const tok = (usingBotAcct ? acctToken : NK.config.get().twitchToken || "").replace(/^oauth:/, "");
+    if (!tok) return; // pas connecté du tout — le panneau ⚙ s'en charge
+    try {
+      const res = await fetch("https://id.twitch.tv/oauth2/validate", { headers: { Authorization: "OAuth " + tok } });
+      const need = ["chat:read", "chat:edit", "moderator:manage:chat_messages", "moderator:manage:banned_users"];
+      let text = null;
+      if (!res.ok) {
+        text = usingBotAcct
+          ? "Le token du compte du bot est invalide ou expiré — reconnectez-le ci-dessous (section 👤 Compte du bot)."
+          : "Votre token Twitch est invalide ou expiré — reconnectez-vous via le panneau ⚙ Twitch.";
+      } else {
+        const d = await res.json();
+        const missing = need.filter((s) => (d.scopes || []).indexOf(s) === -1);
+        if (missing.length) {
+          text = (usingBotAcct
+            ? "Le compte du bot a été connecté sans les autorisations chat (" + missing.join(", ") + ") — reconnectez-le (section 👤 Compte du bot)."
+            : "Votre connexion Twitch date d'avant l'ajout du bot : il manque " + missing.join(", ")
+              + ". Le bot NE POURRA PAS écrire dans le chat. Ouvrez ⚙ Twitch → Déconnecter → Se connecter, puis redémarrez OBS.");
+        }
+      }
+      if (text) {
+        el.innerHTML = '<div style="background:rgba(224,112,112,0.08);border:1px solid rgba(224,112,112,0.4);'
+          + 'border-radius:5px;padding:10px 12px;margin-bottom:12px;font-size:11px;line-height:1.6;">'
+          + '<span style="color:#e07070;font-weight:bold;">⚠ Le bot ne pourra pas se connecter au chat</span><br>'
+          + esc(text) + "</div>";
+      }
+    } catch (e) { /* hors-ligne — le relais fera le même diagnostic dans nk-relay.log */ }
   }
 
   function refreshAcctStatus() {

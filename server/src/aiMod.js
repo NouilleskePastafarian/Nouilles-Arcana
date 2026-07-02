@@ -133,9 +133,49 @@ async function startAiMod(cfg, api, broadcasterId) {
 
   // ── Compte utilisé par le bot ──────────────────────────────────────────
   const hasBotAccount = !!(conf.botToken && conf.botLogin);
-  const ircLogin = hasBotAccount ? String(conf.botLogin).toLowerCase() : streamerLogin;
+  let ircLogin = hasBotAccount ? String(conf.botLogin).toLowerCase() : streamerLogin;
   const ircToken = hasBotAccount ? conf.botToken.replace(/^oauth:/, '') : cfg.bearerToken;
   const botNameLc = String(conf.botName || ircLogin).toLowerCase();
+  const whichPanel = hasBotAccount ? 'panneau 🤖 Bot (Compte du bot)' : 'panneau ⚙ Twitch (Déconnecter puis Se connecter)';
+
+  // Validation du token AVANT la connexion IRC : un token émis avant l'ajout
+  // du bot n'a pas les scopes chat:* et Twitch répond "Login unsuccessful"
+  // sans plus de détail — on préfère diagnostiquer ici avec la vraie cause
+  // plutôt que de boucler sur des reconnexions vouées à l'échec.
+  try {
+    const res = await fetch('https://id.twitch.tv/oauth2/validate', {
+      headers: { Authorization: 'OAuth ' + ircToken },
+    });
+    if (!res.ok) {
+      logger.error('Bot : token ' + (hasBotAccount ? 'du compte "' + conf.botLogin + '"' : 'de votre compte')
+        + ' invalide ou expiré (HTTP ' + res.status + ') — bot désactivé. Reconnectez-vous via le ' + whichPanel + ' puis redémarrez OBS.');
+      return null;
+    }
+    const d = await res.json();
+    const scopes = d.scopes || [];
+    const missChat = ['chat:read', 'chat:edit'].filter((s) => scopes.indexOf(s) === -1);
+    const missMod = ['moderator:manage:chat_messages', 'moderator:manage:banned_users'].filter((s) => scopes.indexOf(s) === -1);
+    if (missChat.length) {
+      logger.error('Bot : le token ' + (hasBotAccount ? 'du compte "' + conf.botLogin + '"' : 'de votre compte')
+        + ' n\'a pas les scopes ' + missChat.join(' ') + ' (il date d\'avant l\'ajout du bot) — bot désactivé.'
+        + ' Reconnectez-vous via le ' + whichPanel + ' puis redémarrez OBS.');
+      return null;
+    }
+    if (missMod.length) {
+      logger.warn('Bot : scopes de modération manquants (' + missMod.join(' ') + ') — annonces et commandes OK,'
+        + ' mais pas de timeout/suppression. Reconnectez-vous via le ' + whichPanel + ' pour tout activer.');
+    }
+    // Le NICK IRC doit être le propriétaire réel du token — corrige un
+    // éventuel pseudo mal saisi.
+    const tokenLogin = String(d.login || '').toLowerCase();
+    if (tokenLogin && tokenLogin !== ircLogin) {
+      logger.warn('Bot : le token appartient à "' + tokenLogin + '" (config : "' + ircLogin + '") — utilisation de "' + tokenLogin + '".');
+      ircLogin = tokenLogin;
+    }
+  } catch (e) {
+    logger.error('Bot : impossible de valider le token Twitch (' + (e && e.message) + ') — bot désactivé pour cette session.');
+    return null;
+  }
 
   // Client Helix de modération : celui du compte qui agit (moderator_id doit
   // correspondre au propriétaire du token).
@@ -375,7 +415,13 @@ async function startAiMod(cfg, api, broadcasterId) {
   }
 
   // ── Connexion IRC ──────────────────────────────────────────────────────
+  // `stopped` coupe la reconnexion automatique : posé par stop() et après
+  // 3 refus d'authentification d'affilée (inutile d'insister, le token est
+  // en cause — le message d'erreur dit déjà quoi faire).
+  let stopped = false;
+  let authFails = 0;
   function connect() {
+    if (stopped) return;
     try { ws = new WebSocket('wss://irc-ws.chat.twitch.tv:443'); }
     catch (e) { setTimeout(connect, 5000); return; }
 
@@ -393,22 +439,26 @@ async function startAiMod(cfg, api, broadcasterId) {
         if (line.startsWith('PING')) { ws.send('PONG :tmi.twitch.tv'); return; }
         const msg = parseIrcLine(line);
         if (!msg) return;
-        if (msg.cmd === 'PRIVMSG') onPrivmsg(msg);
+        if (msg.cmd === 'PRIVMSG') { authFails = 0; onPrivmsg(msg); }
         else if (msg.cmd === 'NOTICE' && /login|auth/i.test(msg.message)) {
-          logger.error('Bot : authentification chat refusée (' + msg.message + ') — '
-            + (hasBotAccount ? 'reconnectez le compte du bot dans le panneau 🤖 Bot.' : 'le token a-t-il les scopes chat:read chat:edit ? Reconnectez-vous via le panneau Twitch.'));
+          authFails++;
+          logger.error('Bot : authentification chat refusée (' + msg.message + ') — reconnectez-vous via le ' + whichPanel + '.');
+          if (authFails >= 3) {
+            stopped = true;
+            logger.error('Bot : 3 refus d\'authentification — abandon des reconnexions pour cette session. Corrigez le token puis redémarrez OBS.');
+          }
         }
       });
     });
 
-    ws.on('close', () => { setTimeout(connect, 5000); });
+    ws.on('close', () => { if (!stopped) setTimeout(connect, 5000); });
     ws.on('error', () => { try { ws.close(); } catch (e) {} });
   }
 
   connect();
   return {
     onRelayEvent,
-    stop: () => { try { ws && ws.close(); } catch (e) {} },
+    stop: () => { stopped = true; try { ws && ws.close(); } catch (e) {} },
   };
 }
 

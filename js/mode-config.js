@@ -560,17 +560,26 @@ const TWITCH_SCOPES = "bits:read channel:read:subscriptions moderator:read:follo
     } catch (e) { /* pas critique — pas de connexion réseau, on ignore */ }
   }
 
-  // ── Flux OAuth générique (réutilisé par le panneau 🤖 Bot pour le compte
-  //    dédié du bot). onDone(token, login, errMsg) — token SANS préfixe oauth:.
-  NK.twitchOAuth = function (onDone) {
+  // ── URL d'autorisation Twitch (réutilisée par le panneau 🤖 Bot, qui la
+  //    propose aussi en copier-coller pour une fenêtre de navigation privée).
+  //    Retourne null si le Client ID n'est pas encore configuré.
+  NK.twitchOAuthUrl = function () {
     const cid = _getEffectiveClientId();
-    if (!cid) { onDone(null, null, "Client ID manquant — faites d'abord l'étape 2 du panneau ⚙ Twitch."); return; }
-    const url = "https://id.twitch.tv/oauth2/authorize"
+    if (!cid) return null;
+    return "https://id.twitch.tv/oauth2/authorize"
       + "?client_id="    + encodeURIComponent(cid)
       + "&redirect_uri=" + encodeURIComponent(TWITCH_REDIRECT)
       + "&response_type=token"
       + "&scope="        + encodeURIComponent(TWITCH_SCOPES)
       + "&force_verify=true";
+  };
+  NK.twitchScopes = TWITCH_SCOPES;
+
+  // ── Flux OAuth générique (réutilisé par le panneau 🤖 Bot pour le compte
+  //    dédié du bot). onDone(token, login, errMsg) — token SANS préfixe oauth:.
+  NK.twitchOAuth = function (onDone) {
+    const url = NK.twitchOAuthUrl();
+    if (!url) { onDone(null, null, "Client ID manquant — faites d'abord l'étape 2 du panneau ⚙ Twitch."); return; }
     window.open(url, "twitch-oauth", "width=560,height=700,left=300,top=150");
     const handler = async (e) => {
       if (!e.data || e.data.type !== "nk-oauth-token") return;

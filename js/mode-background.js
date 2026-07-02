@@ -372,9 +372,16 @@
     if (tab === "tout")   return { lights:true,  steam:true,  petals:true,  fg:true,  markers:true };
     if (tab === "lights") return { lights:true,  steam:false, petals:false, fg:false, markers:true };
     if (tab === "steam")  return { lights:false, steam:true,  petals:false, fg:false, markers:true };
-    // Onglet Premier plan : on montre TOUT — c'est là qu'on compose le plan
-    // avant, masquer la vapeur/les lueurs mises en avant serait déroutant.
+    // Onglet Premier plan : toutes les familles visibles, MAIS filtrées par
+    // plan — seuls les éléments "avant" apparaissent (voir onFgTab() dans les
+    // rendus), avec le fond assombri en simple repère.
     if (tab === "fg")     return { lights:true,  steam:true,  petals:true,  fg:true,  markers:true };
+  }
+
+  // Vrai quand on est sur l'onglet Premier plan : la scène n'affiche alors
+  // QUE le plan avant (aperçu fidèle de la source OBS #avant).
+  function onFgTab() {
+    return core.getActiveTab() === "fg";
     return { lights:false, steam:false, petals:true, fg:false, markers:false }; // ambiance
   }
 
@@ -561,6 +568,7 @@
     const cfg = core.getConfig();
     if (!vis.lights) return;
     cfg.lights.forEach((l, i) => {
+      if (onFgTab() && planOf(l) !== "avant") return; // onglet Premier plan : plan avant uniquement
       const c = l.clip || { left:0, top:0, w:1, h:1 };
       const wrap = document.createElement("div");
       wrap.className = "nk-light-wrap";
@@ -661,6 +669,7 @@
     const cfg = core.getConfig();
     if (!vis.steam || !vis.markers) return;
     cfg.particles.forEach((s, i) => {
+      if (onFgTab() && planOf(s) !== "avant") return; // onglet Premier plan : plan avant uniquement
       const marker = document.createElement("div");
       marker.className = "nk-marker";
       marker.style.left = (s.x * 100) + "%";
@@ -1259,6 +1268,10 @@
 
   function refreshOverlay() {
     stageInner.querySelectorAll(".nk-light-wrap, .nk-marker, .nk-clipbox, .nk-fg, .nk-frame").forEach((el) => el.remove());
+    // Onglet Premier plan : le fond n'est qu'un repère, très assombri — ce
+    // qui reste lumineux est exactement ce que la source OBS #avant affichera.
+    const bgEl = stageInner.querySelector(".bgEl");
+    if (bgEl) bgEl.style.filter = onFgTab() ? "brightness(0.25) saturate(0.5)" : "";
     renderLightOverlay();
     renderParticlesOverlay();
     renderAmbianceOverlay();
@@ -1309,6 +1322,8 @@
     if (core.getModeId() !== "background") return null;
     const cfg = core.getConfig();
     if (!cfg) return null;
+    // Onglet Premier plan : le plan arrière n'est pas dessiné du tout.
+    if (which === "arriere" && onFgTab()) return { particles: [], ambiances: [] };
     return {
       particles: (cfg.particles || []).filter((p) => planOf(p) === which),
       ambiances: (cfg.ambiances || []).filter((a) => planOf(a) === which),
@@ -1582,7 +1597,8 @@
     let html = renderVisToggles(["fg", "lights", "steam", "petals", "markers"]);
     html += "<h3>🌿 PREMIER PLAN</h3>";
     html += '<div class="hint">Éléments affichés <b>devant votre jeu</b> dans OBS : plantes détourées du fond, PNG transparents, cadres adoucis. '
-      + 'Dans OBS, ajoutez ce fichier une 2ᵉ fois avec <code>#avant</code> à la fin de l\'URL et placez cette source AU-DESSUS de la capture du jeu (mode d\'emploi complet : onglet 🎬 Tout).</div>';
+      + 'Ici, la scène montre <b>uniquement le plan avant</b> — le fond est assombri en simple repère, et tout ce qui reste lumineux est '
+      + 'exactement ce que la source OBS <code>#avant</code> affichera par-dessus le jeu (mode d\'emploi complet : onglet 🎬 Tout).</div>';
 
     // Récapitulatif des éléments des AUTRES onglets réglés sur le plan Avant
     // (une vapeur, une lueur…) — cliquer ouvre leur onglet pour les éditer.
@@ -1649,7 +1665,11 @@
   }
 
   function renderTab(tabId, cfg) {
-    if (tabId !== lastRenderedTab) { vis = defaultVisFor(tabId); lastRenderedTab = tabId; }
+    if (tabId !== lastRenderedTab) {
+      vis = defaultVisFor(tabId);
+      lastRenderedTab = tabId;
+      seedParticles(); // les vues par plan dépendent de l'onglet (fg = avant seul)
+    }
     if (tabId === "tout") return renderToutTab(cfg);
     if (tabId === "lights") return renderLightsTab(cfg);
     if (tabId === "steam") return renderParticlesTab(cfg);
